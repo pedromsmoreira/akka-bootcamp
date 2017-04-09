@@ -48,32 +48,8 @@ namespace GithubActors.Actors
         private IActorRef _coordinator;
         private IActorRef _canAcceptJobSender;
 
+        private RepoKey _repoJob;
         private int pendingJobReplies;
-
-        //public GithubCommanderActor()
-        //{
-        //    Receive<CanAcceptJob>(job =>
-        //    {
-        //        _canAcceptJobSender = Sender;
-        //        _coordinator.Tell(job);
-        //    });
-
-        //    Receive<UnableToAcceptJob>(job =>
-        //    {
-        //        _canAcceptJobSender.Tell(job);
-        //    });
-
-        //    Receive<AbleToAcceptJob>(job =>
-        //    {
-        //        _canAcceptJobSender.Tell(job);
-
-        //        //start processing messages
-        //        _coordinator.Tell(new GithubCoordinatorActor.BeginJob(job.Repo));
-
-        //        //launch the new window to view results of the processing
-        //        Context.ActorSelection(ActorPaths.MainFormActor.Path).Tell(new MainFormActor.LaunchRepoResultsWindow(job.Repo, Sender));
-        //    });
-        //}
 
         public GithubCommanderActor()
         {
@@ -85,6 +61,7 @@ namespace GithubActors.Actors
             Receive<CanAcceptJob>(job =>
             {
                 _coordinator.Tell(job);
+                _repoJob = job.Repo;
                 BecomeAsking();
             });
         }
@@ -95,12 +72,21 @@ namespace GithubActors.Actors
             // block, but ask the router for the number of routees. Avoids magic numbers.
             pendingJobReplies = _coordinator.Ask<Routees>(new GetRoutees()).Result.Members.Count();
             Become(Asking);
+
+            // send ourselves a ReceiveTimeout message if no message within 3 seconds
+            Context.SetReceiveTimeout(TimeSpan.FromSeconds(3));
         }
 
         private void Asking()
         {
             // stash any subsequent requests
             Receive<CanAcceptJob>(job => Stash.Stash());
+
+            Receive<ReceiveTimeout>(timeout =>
+            {
+                _canAcceptJobSender.Tell(new UnableToAcceptJob(_repoJob));
+                BecomeReady();
+            });
 
             Receive<UnableToAcceptJob>(job =>
             {
@@ -130,6 +116,9 @@ namespace GithubActors.Actors
         {
             Become(Ready);
             Stash.UnstashAll();
+
+            // Cancel ReceiveTimeout
+            Context.SetReceiveTimeout(null);
         }
 
         public IStash Stash { get; set; }
